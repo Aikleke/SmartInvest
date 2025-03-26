@@ -153,7 +153,6 @@ def get_stock_pe_at_date(stock_code, target_date):
     获取指定时间点的股票PE值，使用本地财务数据
     """
     try:
-        
         # 获取股票每日收盘价
         stock_price_df = ak.stock_zh_a_hist(
             symbol=stock_code,
@@ -175,20 +174,31 @@ def get_stock_pe_at_date(stock_code, target_date):
         # 处理财务数据
         financial_data['基本每股收益'] = pd.to_numeric(financial_data['基本每股收益'], errors='coerce')
         
-        # 只保留年报数据
-        annual_reports = financial_data[financial_data['报告期'].month == 12]
+        # 获取目标日期的年份
+        target_year = pd.to_datetime(target_date).year
         
-        if annual_reports.empty:
-            print(f"未找到股票 {stock_code} 的年报数据")
+        # 获取目标日期之前的最近一期年报数据
+        valid_reports = financial_data[financial_data.index.year < target_year]
+        
+        if valid_reports.empty:
+            print(f"未找到股票 {stock_code} 在 {target_year} 年之前的年报数据")
             return None
             
-        # 获取目标日期之前的最近一期年报数据
-        target_date_dt = pd.to_datetime(target_date)
-        latest_annual = annual_reports[annual_reports.index <= target_date_dt].iloc[-1]
+        latest_annual = valid_reports.iloc[-1]
+        
+        # 检查每股收益是否有效
+        if pd.isna(latest_annual['基本每股收益']) or latest_annual['基本每股收益'] == 0:
+            print(f"股票 {stock_code} 的每股收益数据无效")
+            return None
         
         # 计算PE
         pe = stock_price_df['收盘'].iloc[0] / latest_annual['基本每股收益']
         
+        # 检查PE值是否合理
+        if pd.isna(pe) or pe < 0 or pe > 1000:  # 设置一个合理的PE值范围
+            print(f"股票 {stock_code} 的PE值异常: {pe}")
+            return None
+            
         return pe
         
     except Exception as e:
@@ -246,6 +256,9 @@ def get_all_stocks_pe(target_date, max_workers=10):
     if all_stocks is None:
         return None
     
+    # 确保stock_code列是字符串类型
+    all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
+    
     # 创建结果列表
     results = []
     
@@ -268,13 +281,11 @@ def get_all_stocks_pe(target_date, max_workers=10):
     start_time = time.time()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务
         future_to_stock = {
             executor.submit(process_stock, row['stock_code']): row['stock_code']
             for _, row in all_stocks.iterrows()
         }
         
-        # 处理完成的任务
         completed = 0
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_code = future_to_stock[future]
@@ -283,28 +294,44 @@ def get_all_stocks_pe(target_date, max_workers=10):
                 result = future.result()
                 if result:
                     results.append(result)
-                # 打印进度
-                if completed % 50 == 0:  # 每处理50只股票打印一次进度
+                if completed % 50 == 0:
                     print(f"已处理 {completed}/{len(all_stocks)} 只股票...")
             except Exception as e:
                 print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
     
-    # 计算耗时
     end_time = time.time()
     print(f"\n处理完成！总耗时: {end_time - start_time:.2f} 秒")
     
     # 创建结果DataFrame
     if results:
         result_df = pd.DataFrame(results)
-        # 合并原始股票信息
+        
+        # 确保两个DataFrame的stock_code列都是字符串类型
+        result_df['stock_code'] = result_df['stock_code'].astype(str).str.zfill(6)
+        all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
+        
+        # 合并数据
         result_df = pd.merge(all_stocks, result_df, on='stock_code', how='left')
+        
+        # 添加日期列
+        result_df['date'] = target_date
+        
         # 按PE值排序
         result_df = result_df.sort_values('pe')
         
         # 保存结果到CSV
-        filename = f'stock_pe_{target_date}.csv'
+        filename = f'pe_data/pe_{target_date}.csv'
+        
+        # 确保目录存在
+        os.makedirs('pe_data', exist_ok=True)
+        
+        # 保存数据
         result_df.to_csv(filename, index=False, encoding='utf-8-sig')
         print(f"\n结果已保存到 {filename}")
+        
+        # 同时保存一个最新数据的副本
+        latest_filepath = 'pe_data/pe_latest.csv'
+        result_df.to_csv(latest_filepath, index=False, encoding='utf-8-sig')
         
         return result_df
     else:
@@ -402,7 +429,9 @@ def load_financial_data(stock_code=None):
             
             # 确保股票代码为字符串格式，并补齐6位
             all_financial_data['stock_code'] = all_financial_data['stock_code'].astype(str).str.zfill(6)
-            all_financial_data['报告期'] = pd.to_datetime(all_financial_data['报告期'])
+            
+            # 处理报告期，确保是年份格式
+            all_financial_data['报告期'] = pd.to_datetime(all_financial_data['报告期'].astype(str) + '-12-31')
             
             if stock_code:
                 # 确保输入的stock_code也是6位字符串格式
@@ -434,12 +463,15 @@ def download_all_financial_data(max_workers=5):
 if __name__ == "__main__":
     # 首先下载所有股票的财务数据（只需要运行一次）
     print("开始下载财务数据...")
-    download_all_financial_data(max_workers=3)  # 使用较小的并发数
+    download_all_financial_data(max_workers=3)
     
     # 然后再获取PE值
-    target_date = "20240301"
+    target_date = "20050105"
     result_df = get_all_stocks_pe(target_date, max_workers=5)
     
     if result_df is not None:
         print("\nPE值最低的10只股票:")
         print(result_df.head(10))
+    # 保存pe数据
+    # 与target_date联动
+    result_df.to_csv(f'stock_pe_{target_date}.csv', index=False, encoding='utf-8-sig')
