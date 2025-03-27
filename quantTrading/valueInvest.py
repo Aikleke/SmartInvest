@@ -1,9 +1,17 @@
-import akshare as ak
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import os
+import akshare as ak
+from pathlib import Path
+
+# 定义数据根目录
+DATA_ROOT = os.path.expanduser('~/investData')
+
+# 确保数据根目录存在
+os.makedirs(DATA_ROOT, exist_ok=True)
+
 plt.switch_backend('TkAgg')  # 可以尝试其他后端
 
 import matplotlib as mpl
@@ -11,6 +19,16 @@ from matplotlib.font_manager import FontProperties
 import concurrent.futures
 import time
 from datetime import datetime
+
+from valueInvestGetData import (
+    load_stock_history,
+    load_financial_data,
+    get_stock_pe_at_date,
+    get_all_stocks_pe,
+    download_all_financial_data,
+    download_all_stocks_history,
+    get_and_save_stock_codes
+)
 
 # 设置中文字体
 try:
@@ -22,70 +40,43 @@ except:
     plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei']
 plt.rcParams['axes.unicode_minus'] = False
 
-def get_all_stock_codes():
-    """
-    获取所有A股股票代码和名称
-    返回: DataFrame，包含股票代码和名称
-    """
-    try:
-        # 获取实时行情数据
-        stock_df = ak.stock_zh_a_spot_em()
-        
-        # 提取需要的列
-        result_df = stock_df[['代码', '名称']]
-        
-        # 重命名列
-        result_df.columns = ['stock_code', 'stock_name']
-        
-        # 确保股票代码是字符串格式
-        result_df['stock_code'] = result_df['stock_code'].astype(str).str.zfill(6)
-        
-        # 按股票代码排序
-        result_df = result_df.sort_values('stock_code')
-        
-        return result_df
-    except Exception as e:
-        print(f"获取股票代码时发生错误: {str(e)}")
-        return None
-
-def analyze_stock_price_and_pe(stock_code, start_date, end_date):
+def analyze_stock_price_and_pe(stock_code, start_date, end_date, financial_data=None):
     """
     分析股票价格和PE的关系
+    
+    参数:
+    stock_code (str): 股票代码
+    start_date (str): 开始日期，格式为'YYYYMMDD'
+    end_date (str): 结束日期，格式为'YYYYMMDD'
+    financial_data (pd.DataFrame): 财务数据，如果为None则从文件加载
+    
+    返回:
+    tuple: (price_series, pe_series) 包含价格和PE的Series
     """
-    # 1. 获取股票每日收盘价
-    stock_price_df = ak.stock_zh_a_hist(
-        symbol=stock_code,
-        period="daily",
-        start_date=start_date,
-        end_date=end_date
-    )
+    # 1. 从本地文件获取股票每日收盘价
+    stock_price_df = load_stock_history(stock_code, start_date, end_date)
+    if stock_price_df is None:
+        print(f"未找到股票 {stock_code} 的历史数据")
+        return None, None
 
-    # 2. 获取每股收益数据
-    financial_data = ak.stock_financial_abstract_ths(
-        symbol=stock_code,
-        indicator="按报告期"
-    )
+    # 2. 获取财务数据
+    if financial_data is None:
+        financial_data = load_financial_data(stock_code)
+        if financial_data is None or financial_data.empty:
+            print(f"未找到股票 {stock_code} 的财务数据")
+            return None, None
 
     # 3. 数据处理
     # 处理日期格式
     stock_price_df['日期'] = pd.to_datetime(stock_price_df['日期'])
     stock_price_df.set_index('日期', inplace=True)
     
-    # 处理财务数据 - 修改这部分
+    # 处理财务数据
     financial_data['基本每股收益'] = pd.to_numeric(financial_data['基本每股收益'], errors='coerce')
-    financial_data.index = pd.to_datetime(financial_data['报告期'])  # 确保日期格式正确
     
     # 确保日期索引格式化正确
     stock_price_df.index = pd.to_datetime(stock_price_df.index).date
     financial_data.index = pd.to_datetime(financial_data.index).date
-
-    # 添加调试信息
-    print("股价数据日期范围:", stock_price_df.index.min(), "至", stock_price_df.index.max())
-    print("财务数据日期范围:", financial_data.index.min(), "至", financial_data.index.max())
-    
-    # 检查日期格式
-    print("股价数据日期类型:", type(stock_price_df.index[0]))
-    print("财务数据日期类型:", type(financial_data.index[0]))
 
     # 将每股收益数据填充到每个交易日
     eps_daily = financial_data['基本每股收益'].reindex(stock_price_df.index, method='ffill')
@@ -148,241 +139,117 @@ def analyze_stock_price_and_pe(stock_code, start_date, end_date):
 
     return stock_price_df['收盘'], pe_daily
 
-def get_stock_pe_at_date(stock_code, target_date):
+def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_upper_bound=None, market_cap_threshold=200):
     """
-    获取指定时间点的股票PE值，使用本地财务数据
-    """
-    try:
-        # 获取股票每日收盘价
-        stock_price_df = ak.stock_zh_a_hist(
-            symbol=stock_code,
-            period="daily",
-            start_date=target_date,
-            end_date=target_date
-        )
-        
-        if stock_price_df.empty:
-            print(f"未找到股票 {stock_code} 在 {target_date} 的交易数据")
-            return None
-            
-        # 从本地加载财务数据
-        financial_data = load_financial_data(stock_code)
-        if financial_data is None or financial_data.empty:
-            print(f"未找到股票 {stock_code} 的本地财务数据")
-            return None
-            
-        # 处理财务数据
-        financial_data['基本每股收益'] = pd.to_numeric(financial_data['基本每股收益'], errors='coerce')
-        
-        # 获取目标日期的年份
-        target_year = pd.to_datetime(target_date).year
-        
-        # 获取目标日期之前的最近一期年报数据
-        valid_reports = financial_data[financial_data.index.year < target_year]
-        
-        if valid_reports.empty:
-            print(f"未找到股票 {stock_code} 在 {target_year} 年之前的年报数据")
-            return None
-            
-        latest_annual = valid_reports.iloc[-1]
-        
-        # 检查每股收益是否有效
-        if pd.isna(latest_annual['基本每股收益']) or latest_annual['基本每股收益'] == 0:
-            print(f"股票 {stock_code} 的每股收益数据无效")
-            return None
-        
-        # 计算PE
-        pe = stock_price_df['收盘'].iloc[0] / latest_annual['基本每股收益']
-        
-        # 检查PE值是否合理
-        if pd.isna(pe) or pe < 0 or pe > 1000:  # 设置一个合理的PE值范围
-            print(f"股票 {stock_code} 的PE值异常: {pe}")
-            return None
-            
-        return pe
-        
-    except Exception as e:
-        print(f"获取股票 {stock_code} 在 {target_date} 的PE值时发生错误: {str(e)}")
-        return None
-
-def get_and_save_stock_codes():
-    """
-    获取所有A股股票代码和名称，并保存到CSV文件
-    """
-    try:
-        # 获取所有股票代码和名称
-        all_stocks = get_all_stock_codes()
-
-        # 保存到CSV文件
-        all_stocks.to_csv('all_stocks.csv', index=False, encoding='utf-8-sig')
-        print("\n股票代码已保存到 all_stocks.csv")
-        
-        return all_stocks
-    except Exception as e:
-        print(f"获取股票代码时发生错误: {str(e)}")  
-
-def load_stock_codes_from_csv():
-    """
-    从本地CSV文件加载股票代码数据
-    如果文件不存在，则重新获取并保存
-    """
-    try:
-        # 尝试从CSV文件读取
-        if os.path.exists('all_stocks.csv'):
-            df = pd.read_csv('all_stocks.csv')
-            print(f"从本地文件加载了 {len(df)} 只股票数据")
-            return df
-        else:
-            print("本地文件不存在，重新获取股票数据...")
-            return get_all_stock_codes()
-    except Exception as e:
-        print(f"读取本地文件时发生错误: {str(e)}")
-        print("重新获取股票数据...")
-        return get_all_stock_codes()
-
-def get_all_stocks_pe(target_date, max_workers=10):
-    """
-    并行获取所有股票的PE值
+    分析指定PE范围内的股票历史收益
     
     参数:
-    target_date (str): 目标日期，格式为'YYYYMMDD'
-    max_workers (int): 最大线程数，默认10
+    pe_file_date (str): PE数据文件的日期，格式为'YYYYMMDD'
+    pe_lower_bound (float): PE下界，可选
+    pe_upper_bound (float): PE上界，可选
+    market_cap_threshold (float): 市值阈值（单位：亿元），默认200亿
     
     返回:
-    DataFrame: 包含股票代码、名称和PE值的DataFrame
-    """
-    # 从本地文件加载股票代码
-    all_stocks = load_stock_codes_from_csv()
-    if all_stocks is None:
-        return None
-    
-    # 确保stock_code列是字符串类型
-    all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
-    
-    # 创建结果列表
-    results = []
-    
-    def process_stock(stock_code):
-        """处理单个股票的函数"""
-        try:
-            stock_code = str(stock_code).zfill(6)
-            pe_value = get_stock_pe_at_date(stock_code, target_date)
-            if pe_value is not None:
-                return {
-                    'stock_code': stock_code,
-                    'pe': pe_value
-                }
-        except Exception as e:
-            print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
-        return None
-    
-    # 使用线程池并行处理
-    print(f"\n开始获取 {len(all_stocks)} 只股票的PE值...")
-    start_time = time.time()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_stock = {
-            executor.submit(process_stock, row['stock_code']): row['stock_code']
-            for _, row in all_stocks.iterrows()
-        }
-        
-        completed = 0
-        for future in concurrent.futures.as_completed(future_to_stock):
-            stock_code = future_to_stock[future]
-            completed += 1
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-                if completed % 50 == 0:
-                    print(f"已处理 {completed}/{len(all_stocks)} 只股票...")
-            except Exception as e:
-                print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
-    
-    end_time = time.time()
-    print(f"\n处理完成！总耗时: {end_time - start_time:.2f} 秒")
-    
-    # 创建结果DataFrame
-    if results:
-        result_df = pd.DataFrame(results)
-        
-        # 确保两个DataFrame的stock_code列都是字符串类型
-        result_df['stock_code'] = result_df['stock_code'].astype(str).str.zfill(6)
-        all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
-        
-        # 合并数据
-        result_df = pd.merge(all_stocks, result_df, on='stock_code', how='left')
-        
-        # 添加日期列
-        result_df['date'] = target_date
-        
-        # 按PE值排序
-        result_df = result_df.sort_values('pe')
-        
-        # 保存结果到CSV
-        filename = f'pe_data/pe_{target_date}.csv'
-        
-        # 确保目录存在
-        os.makedirs('pe_data', exist_ok=True)
-        
-        # 保存数据
-        result_df.to_csv(filename, index=False, encoding='utf-8-sig')
-        print(f"\n结果已保存到 {filename}")
-        
-        # 同时保存一个最新数据的副本
-        latest_filepath = 'pe_data/pe_latest.csv'
-        result_df.to_csv(latest_filepath, index=False, encoding='utf-8-sig')
-        
-        return result_df
-    else:
-        print("未获取到任何有效的PE值")
-        return None
-
-def save_financial_data_batch(stock_codes, max_workers=5):
-    """
-    批量获取并保存所有股票的财务数据到单个文件
+    tuple: (positive_df, negative_df) 包含正收益和负收益股票的DataFrame
     """
     try:
-        # 确保存储目录存在
-        if not os.path.exists('financial_data'):
-            os.makedirs('financial_data')
+        # 读取PE数据
+        pe_file = os.path.join(DATA_ROOT, 'pe_data', f'pe_{pe_file_date}.csv')
+        if not os.path.exists(pe_file):
+            print(f"未找到PE数据文件: {pe_file}")
+            print("开始计算PE值...")
+            pe_df = get_all_stocks_pe(pe_file_date, max_workers=50)  # 增加线程数
+            if pe_df is None:
+                print("计算PE值失败")
+                return None, None
+            # 保存PE数据
+            os.makedirs(os.path.dirname(pe_file), exist_ok=True)
+            pe_df.to_csv(pe_file, index=False, encoding='utf-8-sig')
+            print(f"PE数据已保存到: {pe_file}")
+        else:
+            pe_df = pd.read_csv(pe_file)
+        
+        # 确保股票代码是6位字符串格式
+        pe_df['stock_code'] = pe_df['stock_code'].astype(str).str.zfill(6)
+        
+        # 从保存的文件中读取市值数据
+        print("读取市值数据...")
+        stock_info = pd.read_csv(os.path.join(DATA_ROOT, 'all_stocks.csv'))
+        stock_info['stock_code'] = stock_info['stock_code'].astype(str).str.zfill(6)
+        
+        # 合并PE数据和市值数据，使用suffixes参数避免列名冲突
+        pe_df = pd.merge(pe_df, stock_info[['stock_code', 'market_cap']], on='stock_code', how='left', suffixes=('', '_new'))
+        
+        # 如果存在重复的market_cap列，保留一个
+        if 'market_cap_new' in pe_df.columns:
+            pe_df['market_cap'] = pe_df['market_cap_new']
+            pe_df = pe_df.drop('market_cap_new', axis=1)
+        
+        # 筛选市值大于阈值的股票
+        pe_df = pe_df[pe_df['market_cap'] >= market_cap_threshold * 100000000]  # 转换为元
+        print(f"筛选出 {len(pe_df)} 只市值大于 {market_cap_threshold} 亿的股票")
+        
+        # 根据PE范围筛选股票
+        if pe_lower_bound is not None:
+            pe_df = pe_df[pe_df['pe'] >= pe_lower_bound]
+        if pe_upper_bound is not None:
+            pe_df = pe_df[pe_df['pe'] <= pe_upper_bound]
             
-        filepath = 'financial_data/all_stocks_financial.csv'
+        if pe_df.empty:
+            print(f"未找到符合条件的股票")
+            return None, None
+            
+        print(f"\n找到 {len(pe_df)} 只符合条件的股票")
+        print(f"PE范围: [{pe_lower_bound}, {pe_upper_bound}]")
+        print(f"市值范围: > {market_cap_threshold} 亿")
         
-        # 如果文件已存在且不超过7天，直接返回
-        if os.path.exists(filepath):
-            file_time = datetime.fromtimestamp(os.path.getmtime(filepath))
-            if (datetime.now() - file_time).days < 7:
-                print("使用缓存的财务数据（未超过7天）")
-                return True
+        # 获取当前日期
+        today = datetime.now().strftime('%Y%m%d')
         
-        all_financial_data = []
+        # 创建结果列表
+        results = []
         
-        def process_stock(stock_code):
+        def process_stock(row):
             try:
-                stock_code = str(stock_code).zfill(6)
-                time.sleep(0.5)  # 添加延时避免被封
-                financial_data = ak.stock_financial_abstract_ths(
-                    symbol=stock_code,
-                    indicator="按年度"
-                )
+                stock_code = row['stock_code']
+                stock_name = row['stock_name']
+                pe = row['pe']
+                market_cap = row['market_cap'] / 100000000  # 转换为亿元
                 
-                if financial_data is not None and not financial_data.empty:
-                    # 添加股票代码列
-                    financial_data['stock_code'] = stock_code
-                    return financial_data
+                # 从本地文件获取历史数据
+                hist_data = load_stock_history(stock_code, pe_file_date, today)
+                if hist_data is None or hist_data.empty:
+                    print(f"未找到股票 {stock_code} 的历史数据")
+                    return None
                     
+                # 计算收益率
+                start_price = hist_data['收盘'].iloc[0]
+                end_price = hist_data['收盘'].iloc[-1]
+                return_rate = (end_price - start_price) / start_price * 100
+                
+                return {
+                    'stock_code': stock_code,
+                    'stock_name': stock_name,
+                    'pe': pe,
+                    'market_cap': market_cap,
+                    'return_rate': return_rate,
+                    'start_price': start_price,
+                    'end_price': end_price,
+                    'days': len(hist_data)
+                }
+                
             except Exception as e:
-                print(f"获取股票 {stock_code} 财务数据时发生错误: {str(e)}")
-            return None
+                print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
+                return None
         
-        print(f"\n开始下载 {len(stock_codes)} 只股票的财务数据...")
+        # 使用线程池并行处理
+        print("\n开始计算历史收益...")
         start_time = time.time()
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:  # 增加线程数
             future_to_stock = {
-                executor.submit(process_stock, code): code
-                for code in stock_codes
+                executor.submit(process_stock, row): row['stock_code']
+                for _, row in pe_df.iterrows()
             }
             
             completed = 0
@@ -390,88 +257,143 @@ def save_financial_data_batch(stock_codes, max_workers=5):
                 stock_code = future_to_stock[future]
                 completed += 1
                 try:
-                    df = future.result()
-                    if df is not None:
-                        all_financial_data.append(df)
+                    result = future.result()
+                    if result:
+                        results.append(result)
                     if completed % 10 == 0:
-                        print(f"已处理 {completed}/{len(stock_codes)} 只股票...")
+                        print(f"已处理 {completed}/{len(pe_df)} 只股票...")
                 except Exception as e:
                     print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
         
-        # 合并所有数据
-        if all_financial_data:
-            combined_df = pd.concat(all_financial_data, ignore_index=True)
-            # 确保股票代码格式一致
-            combined_df['stock_code'] = combined_df['stock_code'].astype(str).str.zfill(6)
-            # 保存到单个CSV文件
-            combined_df.to_csv(filepath, index=False, encoding='utf-8-sig')
-            print(f"\n已保存所有股票的财务数据到 {filepath}")
+        # 创建结果DataFrame
+        if results:
+            result_df = pd.DataFrame(results)
             
-            end_time = time.time()
-            print(f"下载完成！总耗时: {end_time - start_time:.2f} 秒")
-            return True
+            # 分离正收益和负收益股票
+            positive_df = result_df[result_df['return_rate'] > 0].copy()
+            negative_df = result_df[result_df['return_rate'] <= 0].copy()
             
-        return False
+            # 分别排序
+            positive_df = positive_df.sort_values('return_rate', ascending=False)
+            negative_df = negative_df.sort_values('return_rate', ascending=True)
+            
+            # 计算统计信息
+            print("\n分析结果:")
+            print(f"正收益股票数量: {len(positive_df)}")
+            print(f"负收益股票数量: {len(negative_df)}")
+            print(f"\n正收益股票统计:")
+            print(f"平均收益率: {positive_df['return_rate'].mean():.2f}%")
+            print(f"最大收益率: {positive_df['return_rate'].max():.2f}%")
+            print(f"最小收益率: {positive_df['return_rate'].min():.2f}%")
+            print(f"收益率中位数: {positive_df['return_rate'].median():.2f}%")
+            print(f"\n负收益股票统计:")
+            print(f"平均收益率: {negative_df['return_rate'].mean():.2f}%")
+            print(f"最大亏损率: {negative_df['return_rate'].max():.2f}%")
+            print(f"最小亏损率: {negative_df['return_rate'].min():.2f}%")
+            print(f"亏损率中位数: {negative_df['return_rate'].median():.2f}%")
+            
+            # 保存结果
+            positive_file = os.path.join(DATA_ROOT, 'pe_data', f'pe_positive_{pe_file_date}.csv')
+            negative_file = os.path.join(DATA_ROOT, 'pe_data', f'pe_negative_{pe_file_date}.csv')
+            positive_df.to_csv(positive_file, index=False, encoding='utf-8-sig')
+            negative_df.to_csv(negative_file, index=False, encoding='utf-8-sig')
+            print(f"\n分析结果已保存到:")
+            print(f"正收益股票: {positive_file}")
+            print(f"负收益股票: {negative_file}")
+            
+            return positive_df, negative_df
+        else:
+            print("未获取到任何有效的收益数据")
+            return None, None
             
     except Exception as e:
-        print(f"保存财务数据时发生错误: {str(e)}")
-        return False
+        print(f"分析股票时发生错误: {str(e)}")
+        return None, None
 
-def load_financial_data(stock_code=None):
+def analyze_multiple_stocks_price_and_pe(stock_codes, start_date, end_date):
     """
-    从本地加载股票财务数据
-    如果不指定stock_code，则返回所有数据
-    """
-    try:
-        filepath = 'financial_data/all_stocks_financial.csv'
-        if os.path.exists(filepath):
-            all_financial_data = pd.read_csv(filepath)
-            
-            # 确保股票代码为字符串格式，并补齐6位
-            all_financial_data['stock_code'] = all_financial_data['stock_code'].astype(str).str.zfill(6)
-            
-            # 处理报告期，确保是年份格式
-            all_financial_data['报告期'] = pd.to_datetime(all_financial_data['报告期'].astype(str) + '-12-31')
-            
-            if stock_code:
-                # 确保输入的stock_code也是6位字符串格式
-                stock_code = str(stock_code).zfill(6)
-                # 返回指定股票的数据
-                stock_data = all_financial_data[all_financial_data['stock_code'] == stock_code].copy()
-                stock_data.set_index('报告期', inplace=True)
-                return stock_data
-            else:
-                # 返回所有数据
-                return all_financial_data
-        return None
-    except Exception as e:
-        print(f"加载财务数据时发生错误: {str(e)}")
-        return None
-
-def download_all_financial_data(max_workers=5):
-    """
-    下载所有股票的财务数据
-    """
-    all_stocks = load_stock_codes_from_csv()
-    if all_stocks is None:
-        return False
+    批量分析多只股票的价格和PE关系
     
-    stock_codes = all_stocks['stock_code'].tolist()
-    return save_financial_data_batch(stock_codes, max_workers)
+    参数:
+    stock_codes (list): 股票代码列表
+    start_date (str): 开始日期，格式为'YYYYMMDD'
+    end_date (str): 结束日期，格式为'YYYYMMDD'
+    """
+    # 1. 一次性加载所有股票的财务数据
+    print("加载财务数据...")
+    all_financial_data = load_financial_data()  # 不传入stock_code，加载所有数据
+    if all_financial_data is None:
+        print("加载财务数据失败")
+        return
+    
+    # 2. 分析每只股票
+    for stock_code in stock_codes:
+        try:
+            # 从所有财务数据中筛选出当前股票的财务数据
+            stock_financial_data = all_financial_data[all_financial_data['stock_code'] == stock_code].copy()
+            if not stock_financial_data.empty:
+                stock_financial_data.set_index('报告期', inplace=True)
+                analyze_stock_price_and_pe(stock_code, start_date, end_date, stock_financial_data)
+            else:
+                print(f"未找到股票 {stock_code} 的财务数据")
+        except Exception as e:
+            print(f"分析股票 {stock_code} 时发生错误: {str(e)}")
 
 # 使用示例
 if __name__ == "__main__":
-    # 首先下载所有股票的财务数据（只需要运行一次）
-    print("开始下载财务数据...")
-    download_all_financial_data(max_workers=3)
+    # 1.获取所有股票代码和当前市值
+    #get_and_save_stock_codes()
+
+    # # 首先下载所有股票的财务数据（只需要运行一次）
+    # print("开始下载财务数据...")
+    # download_all_financial_data(max_workers=3)
+
+    # # 然后再获取PE值
+    # target_date = "20050105"
+    # result_df = get_all_stocks_pe(target_date, max_workers=5)
+    #
+    # if result_df is not None:
+    #     print("\nPE值最低的10只股票:")
+    #     print(result_df.head(10))
+    # # 保存pe数据
+    # # 与target_date联动
+    # result_df.to_csv(f'stock_pe_{target_date}.csv', index=False, encoding='utf-8-sig')
+
+    # # 分析多只股票的价格和PE关系
+    # stock_codes = ["000001", "600000", "600036"]  # 示例股票代码
+    # start_date = "20200101"
+    # end_date = "20231231"
+    # analyze_multiple_stocks_price_and_pe(stock_codes, start_date, end_date)
     
-    # 然后再获取PE值
-    target_date = "20050105"
-    result_df = get_all_stocks_pe(target_date, max_workers=5)
+    # ** 分析指定PE范围内的股票历史收益**
+    pe_file_date = "20250326"
+    positive_df, negative_df = analyze_low_pe_stocks_performance(
+        pe_file_date,
+        pe_lower_bound=11,  # PE下界
+        pe_upper_bound=15   # PE上界
+    )
+
+    if positive_df is not None and negative_df is not None:
+        print("\n收益率最高的10只股票:")
+        print(positive_df[['stock_code', 'stock_name', 'pe', 'return_rate', 'days']].head(10))
+        print("\n收益率最低的10只股票:")
+        print(negative_df[['stock_code', 'stock_name', 'pe', 'return_rate', 'days']].head(10))
+
+    # 下载所有股票的历史数据
+    #start_date = "20000101"  # 从2000年开始
+    # download_all_stocks_history(start_date, max_workers=5)
+    #download_all_stocks_history(start_date, max_workers=3,adjust_type=None)
     
-    if result_df is not None:
-        print("\nPE值最低的10只股票:")
-        print(result_df.head(10))
-    # 保存pe数据
-    # 与target_date联动
-    result_df.to_csv(f'stock_pe_{target_date}.csv', index=False, encoding='utf-8-sig')
+    # # 加载单个股票的历史数据示例
+    # stock_code = "000001"
+    # hist_data = load_stock_history(stock_code)
+    # if hist_data is not None:
+    #     print(f"\n股票 {stock_code} 的历史数据:")
+    #     print(hist_data.head())
+
+
+
+
+            
+
+
