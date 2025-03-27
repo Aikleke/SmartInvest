@@ -135,14 +135,14 @@ def get_stock_pe_at_date(stock_code, target_date):
 
 def get_all_stocks_pe(target_date, max_workers=50):
     """
-    并行获取所有股票的PE值
+    并行获取所有股票的PE和PB值
     
     参数:
     target_date (str): 目标日期，格式为'YYYYMMDD'
     max_workers (int): 最大线程数，默认50
     
     返回:
-    DataFrame: 包含股票代码、名称和PE值的DataFrame
+    DataFrame: 包含股票代码、名称、PE值和PB值的DataFrame
     """
     # 从本地文件加载股票代码
     all_stocks = load_stock_codes_from_csv()
@@ -167,7 +167,7 @@ def get_all_stocks_pe(target_date, max_workers=50):
         try:
             stock_code = str(stock_code).zfill(6)
             
-            # 从本地文件获取股票每日收盘价（使用不复权数据计算PE）
+            # 从本地文件获取股票每日收盘价（使用不复权数据计算PE和PB）
             stock_price_df = load_stock_history(stock_code, target_date, target_date, adjust_type=None)
             if stock_price_df is None or stock_price_df.empty:
                 print(f"未找到股票 {stock_code} 在 {target_date} 的交易数据")
@@ -181,6 +181,7 @@ def get_all_stocks_pe(target_date, max_workers=50):
                 
             # 处理财务数据
             stock_financial_data['基本每股收益'] = pd.to_numeric(stock_financial_data['基本每股收益'], errors='coerce')
+            stock_financial_data['每股净资产'] = pd.to_numeric(stock_financial_data['每股净资产'], errors='coerce')
             
             # 获取目标日期的年份
             target_year = pd.to_datetime(target_date).year
@@ -198,18 +199,35 @@ def get_all_stocks_pe(target_date, max_workers=50):
             if pd.isna(latest_annual['基本每股收益']) or latest_annual['基本每股收益'] == 0:
                 print(f"股票 {stock_code} 的每股收益数据无效")
                 return None
+                
+            # 检查每股净资产是否有效
+            if pd.isna(latest_annual['每股净资产']) or latest_annual['每股净资产'] <= 0:
+                print(f"股票 {stock_code} 的每股净资产数据无效")
+                return None
             
             # 计算PE
             pe = stock_price_df['收盘'].iloc[0] / latest_annual['基本每股收益']
+            
+            # 计算PB
+            pb = stock_price_df['收盘'].iloc[0] / latest_annual['每股净资产']
             
             # 检查PE值是否合理
             if pd.isna(pe) or pe < 0 or pe > 1000:  # 设置一个合理的PE值范围
                 print(f"股票 {stock_code} 的PE值异常: {pe}")
                 return None
                 
+            # 检查PB值是否合理
+            if pd.isna(pb) or pb < 0 or pb > 100:  # 设置一个合理的PB值范围
+                print(f"股票 {stock_code} 的PB值异常: {pb}")
+                return None
+                
             return {
                 'stock_code': stock_code,
-                'pe': pe
+                'pe': pe,
+                'pb': pb,
+                'price': stock_price_df['收盘'].iloc[0],
+                'eps': latest_annual['基本每股收益'],
+                'net_asset': latest_annual['每股净资产']
             }
             
         except Exception as e:
@@ -217,7 +235,7 @@ def get_all_stocks_pe(target_date, max_workers=50):
             return None
     
     # 使用线程池并行处理
-    print(f"\n开始获取 {len(all_stocks)} 只股票的PE值...")
+    print(f"\n开始获取 {len(all_stocks)} 只股票的PE和PB值...")
     start_time = time.time()
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -275,7 +293,7 @@ def get_all_stocks_pe(target_date, max_workers=50):
         
         return result_df
     else:
-        print("未获取到任何有效的PE值")
+        print("未获取到任何有效的PE和PB值")
         return None
 
 def save_financial_data_batch(stock_codes, max_workers=5):

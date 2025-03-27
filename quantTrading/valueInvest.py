@@ -139,14 +139,18 @@ def analyze_stock_price_and_pe(stock_code, start_date, end_date, financial_data=
 
     return stock_price_df['收盘'], pe_daily
 
-def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_upper_bound=None, market_cap_threshold=200):
+def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_upper_bound=None, 
+                                    pb_lower_bound=None, pb_upper_bound=None, 
+                                    market_cap_threshold=200):
     """
-    分析指定PE范围内的股票历史收益
+    分析指定PE和PB范围内的股票历史收益
     
     参数:
     pe_file_date (str): PE数据文件的日期，格式为'YYYYMMDD'
     pe_lower_bound (float): PE下界，可选
     pe_upper_bound (float): PE上界，可选
+    pb_lower_bound (float): PB下界，可选
+    pb_upper_bound (float): PB上界，可选
     market_cap_threshold (float): 市值阈值（单位：亿元），默认200亿
     
     返回:
@@ -157,15 +161,15 @@ def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_uppe
         pe_file = os.path.join(DATA_ROOT, 'pe_data', f'pe_{pe_file_date}.csv')
         if not os.path.exists(pe_file):
             print(f"未找到PE数据文件: {pe_file}")
-            print("开始计算PE值...")
+            print("开始计算PE和PB值...")
             pe_df = get_all_stocks_pe(pe_file_date, max_workers=50)  # 增加线程数
             if pe_df is None:
-                print("计算PE值失败")
+                print("计算PE和PB值失败")
                 return None, None
             # 保存PE数据
             os.makedirs(os.path.dirname(pe_file), exist_ok=True)
             pe_df.to_csv(pe_file, index=False, encoding='utf-8-sig')
-            print(f"PE数据已保存到: {pe_file}")
+            print(f"PE和PB数据已保存到: {pe_file}")
         else:
             pe_df = pd.read_csv(pe_file)
         
@@ -195,12 +199,19 @@ def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_uppe
         if pe_upper_bound is not None:
             pe_df = pe_df[pe_df['pe'] <= pe_upper_bound]
             
+        # 根据PB范围筛选股票
+        if pb_lower_bound is not None:
+            pe_df = pe_df[pe_df['pb'] >= pb_lower_bound]
+        if pb_upper_bound is not None:
+            pe_df = pe_df[pe_df['pb'] <= pb_upper_bound]
+            
         if pe_df.empty:
             print(f"未找到符合条件的股票")
             return None, None
             
         print(f"\n找到 {len(pe_df)} 只符合条件的股票")
         print(f"PE范围: [{pe_lower_bound}, {pe_upper_bound}]")
+        print(f"PB范围: [{pb_lower_bound}, {pb_upper_bound}]")
         print(f"市值范围: > {market_cap_threshold} 亿")
         
         # 获取当前日期
@@ -214,6 +225,7 @@ def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_uppe
                 stock_code = row['stock_code']
                 stock_name = row['stock_name']
                 pe = row['pe']
+                pb = row['pb']
                 market_cap = row['market_cap'] / 100000000  # 转换为亿元
                 
                 # 从本地文件获取历史数据
@@ -231,6 +243,7 @@ def analyze_low_pe_stocks_performance(pe_file_date, pe_lower_bound=None, pe_uppe
                     'stock_code': stock_code,
                     'stock_name': stock_name,
                     'pe': pe,
+                    'pb': pb,
                     'market_cap': market_cap,
                     'return_rate': return_rate,
                     'start_price': start_price,
@@ -342,7 +355,7 @@ def analyze_multiple_stocks_price_and_pe(stock_codes, start_date, end_date):
 # 使用示例
 if __name__ == "__main__":
     # 1.获取所有股票代码和当前市值
-    #get_and_save_stock_codes()
+    get_and_save_stock_codes()
 
     # # 首先下载所有股票的财务数据（只需要运行一次）
     # print("开始下载财务数据...")
@@ -366,18 +379,20 @@ if __name__ == "__main__":
     # analyze_multiple_stocks_price_and_pe(stock_codes, start_date, end_date)
     
     # ** 分析指定PE范围内的股票历史收益**
-    pe_file_date = "20250326"
+    pe_file_date = "20150324"
     positive_df, negative_df = analyze_low_pe_stocks_performance(
         pe_file_date,
-        pe_lower_bound=11,  # PE下界
-        pe_upper_bound=15   # PE上界
+        # pe_lower_bound=0,  # PE下界
+        # pe_upper_bound=11   # PE上界
+        pb_lower_bound=3,  # PB下界
+        pb_upper_bound=10   # PB上界
     )
 
     if positive_df is not None and negative_df is not None:
         print("\n收益率最高的10只股票:")
-        print(positive_df[['stock_code', 'stock_name', 'pe', 'return_rate', 'days']].head(10))
+        print(positive_df[['stock_code', 'stock_name', 'pe', 'pb', 'return_rate', 'days']].head(10))
         print("\n收益率最低的10只股票:")
-        print(negative_df[['stock_code', 'stock_name', 'pe', 'return_rate', 'days']].head(10))
+        print(negative_df[['stock_code', 'stock_name', 'pe', 'pb', 'return_rate', 'days']].head(10))
 
     # 下载所有股票的历史数据
     #start_date = "20000101"  # 从2000年开始
