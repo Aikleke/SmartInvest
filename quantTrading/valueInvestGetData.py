@@ -133,167 +133,200 @@ def get_stock_pe_at_date(stock_code, target_date):
         print(f"获取股票 {stock_code} 在 {target_date} 的PE值时发生错误: {str(e)}")
         return None
 
-def get_all_stocks_pe(target_date, max_workers=50):
+def convert_financial_value(value_str):
     """
-    并行获取所有股票的PE和PB值
+    将带单位（万、亿）的财务数据转换为浮点数
+    
+    参数:
+    value_str: 原始数值字符串，如 '1.2万'、'3.5亿'、'12.5%'
+    
+    返回:
+    float: 转换后的数值
+    """
+    try:
+        if not isinstance(value_str, str):
+            return float(value_str)
+            
+        value_str = value_str.strip()
+        
+        # 处理百分数
+        if value_str.endswith('%'):
+            return float(value_str[:-1]) / 100
+            
+        # 处理带单位的数值
+        if value_str.endswith('万'):
+            return float(value_str[:-1]) * 10000
+        elif value_str.endswith('亿'):
+            return float(value_str[:-1]) * 100000000
+        else:
+            return float(value_str)
+    except:
+        return None
+
+def get_all_stocks_pe(target_date, max_workers=5):
+    """
+    获取所有股票的PE值
     
     参数:
     target_date (str): 目标日期，格式为'YYYYMMDD'
-    max_workers (int): 最大线程数，默认50
+    max_workers (int): 最大线程数
     
     返回:
-    DataFrame: 包含股票代码、名称、PE值和PB值的DataFrame
+    DataFrame: 包含股票代码、名称、PE和PB的DataFrame
     """
-    # 从本地文件加载股票代码
-    all_stocks = load_stock_codes_from_csv()
-    if all_stocks is None:
-        return None
-    
-    # 确保stock_code列是字符串类型
-    all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
-    
-    # 一次性加载所有财务数据
-    print("加载所有股票的财务数据...")
-    all_financial_data = load_financial_data()
-    if all_financial_data is None:
-        print("加载财务数据失败")
-        return None
-    
-    # 创建结果列表
-    results = []
-    
-    def process_stock(stock_code):
-        """处理单个股票的函数"""
-        try:
-            stock_code = str(stock_code).zfill(6)
+    try:
+        # 获取所有股票代码
+        stock_info = load_stock_codes_from_csv()
+        if stock_info is None:
+            return None
             
-            # 从本地文件获取股票每日收盘价（使用不复权数据计算PE和PB）
-            stock_price_df = load_stock_history(stock_code, target_date, target_date, adjust_type=None)
-            if stock_price_df is None or stock_price_df.empty:
-                print(f"未找到股票 {stock_code} 在 {target_date} 的交易数据")
-                return None
+        # 一次性加载所有财务数据
+        print("加载所有股票的财务数据...")
+        all_financial_data = load_financial_data()
+        if all_financial_data is None:
+            print("加载财务数据失败")
+            return None
+            
+        # 确保财务数据中的股票代码是字符串格式
+        all_financial_data['stock_code'] = all_financial_data['stock_code'].astype(str).str.zfill(6)
+            
+        # 创建结果列表
+        results = []
+        total_stocks = len(stock_info)
+        processed_count = 0
+        success_count = 0
+        
+        def process_stock(row):
+            nonlocal processed_count, success_count
+            try:
+                # 确保stock_code是字符串格式
+                stock_code = str(row['stock_code']).zfill(6)
+                stock_name = row['stock_name']
+                processed_count += 1
                 
-            # 从已加载的财务数据中筛选当前股票的数据
-            stock_financial_data = all_financial_data[all_financial_data['stock_code'] == stock_code].copy()
-            if stock_financial_data.empty:
-                print(f"未找到股票 {stock_code} 的财务数据")
-                return None
+                print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                      f"成功: {success_count} | 正在处理: {stock_code} {stock_name}", end="")
                 
-            # 处理财务数据
-            stock_financial_data['基本每股收益'] = pd.to_numeric(stock_financial_data['基本每股收益'], errors='coerce')
-            stock_financial_data['每股净资产'] = pd.to_numeric(stock_financial_data['每股净资产'], errors='coerce')
-            
-            # 获取目标日期的年份
-            target_year = pd.to_datetime(target_date).year
-            
-            # 获取目标日期之前的最近一期年报数据
-            valid_reports = stock_financial_data[pd.to_datetime(stock_financial_data['报告期']).dt.year < target_year]
-            
-            if valid_reports.empty:
-                print(f"未找到股票 {stock_code} 在 {target_year} 年之前的年报数据")
-                return None
+                # 从已加载的财务数据中筛选当前股票的数据
+                stock_financial_data = all_financial_data[all_financial_data['stock_code'] == stock_code].copy()
+                if stock_financial_data.empty:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无财务数据)", end="")
+                    return None
+                    
+                # 获取最近的财务数据
+                latest_financial = stock_financial_data.iloc[-1]
                 
-            latest_annual = valid_reports.iloc[-1]
-            
-            # 检查每股收益是否有效
-            if pd.isna(latest_annual['基本每股收益']) or latest_annual['基本每股收益'] == 0:
-                print(f"股票 {stock_code} 的每股收益数据无效")
-                return None
+                # 获取历史数据
+                hist_data = load_stock_history(stock_code, target_date, target_date)
+                if hist_data is None or hist_data.empty:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无历史数据)", end="")
+                    return None
+                    
+                # 获取收盘价
+                close_price = hist_data['收盘'].iloc[0]
                 
-            # 检查每股净资产是否有效
-            if pd.isna(latest_annual['每股净资产']) or latest_annual['每股净资产'] <= 0:
-                print(f"股票 {stock_code} 的每股净资产数据无效")
-                return None
-            
-            # 计算PE
-            pe = stock_price_df['收盘'].iloc[0] / latest_annual['基本每股收益']
-            
-            # 计算PB
-            pb = stock_price_df['收盘'].iloc[0] / latest_annual['每股净资产']
-            
-            # 检查PE值是否合理
-            if pd.isna(pe) or pe < 0 or pe > 1000:  # 设置一个合理的PE值范围
-                print(f"股票 {stock_code} 的PE值异常: {pe}")
-                return None
+                # 转换财务数据
+                eps = convert_financial_value(latest_financial['基本每股收益'])
+                if eps is None or eps == 0:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效EPS)", end="")
+                    return None
+                    
+                net_asset = convert_financial_value(latest_financial['每股净资产'])
+                if net_asset is None or net_asset <= 0:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效净资产)", end="")
+                    return None
+                    
+                net_profit = convert_financial_value(latest_financial['净利润'])
+                if net_profit is None or net_profit == 0:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效净利润)", end="")
+                    return None
+                    
+                core_profit = convert_financial_value(latest_financial['扣非净利润'])
+                if core_profit is None:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效扣非净利润)", end="")
+                    return None
+                    
+                roe = convert_financial_value(latest_financial['净资产收益率'])
+                if roe is None:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效ROE)", end="")
+                    return None
+                    
+                dsi = convert_financial_value(latest_financial['存货周转天数'])
+                if dsi is None:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (无效DSI)", end="")
+                    return None
                 
-            # 检查PB值是否合理
-            if pd.isna(pb) or pb < 0 or pb > 100:  # 设置一个合理的PB值范围
-                print(f"股票 {stock_code} 的PB值异常: {pb}")
-                return None
+                # 计算PE和PB
+                pe = close_price / eps
+                pb = close_price / net_asset
                 
-            return {
-                'stock_code': stock_code,
-                'pe': pe,
-                'pb': pb,
-                'price': stock_price_df['收盘'].iloc[0],
-                'eps': latest_annual['基本每股收益'],
-                'net_asset': latest_annual['每股净资产']
+                # 计算扣非ROE
+                core_roe = core_profit / net_profit * roe
+                
+                # 检查计算结果是否合理
+                if not (0 < pe < 1000 and 0 < pb < 100):
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 跳过: {stock_code} {stock_name} (PE/PB不合理)", end="")
+                    return None
+                
+                success_count += 1
+                print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                      f"成功: {success_count} | 完成: {stock_code} {stock_name} (PE={pe:.2f})", end="")
+                
+                return {
+                    'stock_code': stock_code,
+                    'stock_name': stock_name,
+                    'pe': pe,
+                    'pb': pb,
+                    'dsi': dsi,
+                    'roe': roe,
+                    'core_roe': core_roe
+                }
+                
+            except Exception as e:
+                print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                      f"成功: {success_count} | 错误: {stock_code} {stock_name} ({str(e)})", end="")
+                return None
+        
+        print(f"\n开始处理 {total_stocks} 只股票...")
+        
+        # 使用线程池并行处理
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_stock = {
+                executor.submit(process_stock, row): row['stock_code']
+                for _, row in stock_info.iterrows()
             }
             
-        except Exception as e:
-            print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
+            for future in concurrent.futures.as_completed(future_to_stock):
+                stock_code = future_to_stock[future]
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                except Exception as e:
+                    print(f"\r处理进度: {processed_count}/{total_stocks} ({processed_count/total_stocks*100:.1f}%) "
+                          f"成功: {success_count} | 错误: {stock_code} ({str(e)})", end="")
+        
+        print(f"\n处理完成！成功处理 {success_count}/{total_stocks} 只股票")
+        
+        # 创建结果DataFrame
+        if results:
+            result_df = pd.DataFrame(results)
+            return result_df
+        else:
+            print("未获取到任何有效的PE数据")
             return None
-    
-    # 使用线程池并行处理
-    print(f"\n开始获取 {len(all_stocks)} 只股票的PE和PB值...")
-    start_time = time.time()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_stock = {
-            executor.submit(process_stock, row['stock_code']): row['stock_code']
-            for _, row in all_stocks.iterrows()
-        }
-        
-        completed = 0
-        for future in concurrent.futures.as_completed(future_to_stock):
-            stock_code = future_to_stock[future]
-            completed += 1
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-                if completed % 50 == 0:
-                    print(f"已处理 {completed}/{len(all_stocks)} 只股票...")
-            except Exception as e:
-                print(f"处理股票 {stock_code} 时发生错误: {str(e)}")
-    
-    end_time = time.time()
-    print(f"\n处理完成！总耗时: {end_time - start_time:.2f} 秒")
-    
-    # 创建结果DataFrame
-    if results:
-        result_df = pd.DataFrame(results)
-        
-        # 确保两个DataFrame的stock_code列都是字符串类型
-        result_df['stock_code'] = result_df['stock_code'].astype(str).str.zfill(6)
-        all_stocks['stock_code'] = all_stocks['stock_code'].astype(str).str.zfill(6)
-        
-        # 合并数据
-        result_df = pd.merge(all_stocks, result_df, on='stock_code', how='left')
-        
-        # 添加日期列
-        result_df['date'] = target_date
-        
-        # 按PE值排序
-        result_df = result_df.sort_values('pe')
-        
-        # 保存结果到CSV
-        filename = os.path.join(DATA_ROOT, f'pe_data/pe_{target_date}.csv')
-        
-        # 确保目录存在
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        
-        # 保存数据
-        result_df.to_csv(filename, index=False, encoding='utf-8-sig')
-        print(f"\n结果已保存到 {filename}")
-        
-        # 同时保存一个最新数据的副本
-        latest_filepath = os.path.join(DATA_ROOT, 'pe_data/pe_latest.csv')
-        result_df.to_csv(latest_filepath, index=False, encoding='utf-8-sig')
-        
-        return result_df
-    else:
-        print("未获取到任何有效的PE和PB值")
+            
+    except Exception as e:
+        print(f"获取PE数据时发生错误: {str(e)}")
         return None
 
 def save_financial_data_batch(stock_codes, max_workers=5):
