@@ -38,21 +38,29 @@ def get_all_stock_codes():
         print(f"获取股票代码时发生错误: {str(e)}")
         return None
 
-def get_and_save_stock_codes():
+def get_and_save_stock_codes(force_update=False):
     """
     获取所有A股股票代码和名称，并保存到CSV文件
+    
+    参数:
+    force_update (bool): 是否强制更新数据，默认为False
     
     返回:
     DataFrame: 包含股票代码和名称的DataFrame
     """
     try:
+        # 检查本地文件是否存在
+        filepath = os.path.join(DATA_ROOT, 'all_stocks.csv')
+        if os.path.exists(filepath) and not force_update:
+            print(f"从本地文件读取股票代码: {filepath}")
+            return pd.read_csv(filepath)
+            
         # 获取股票代码和名称
         stock_info = get_all_stock_codes()
         if stock_info is None:
             return None
             
         # 保存到CSV文件
-        filepath = os.path.join(DATA_ROOT, 'all_stocks.csv')
         stock_info.to_csv(filepath, index=False, encoding='utf-8-sig')
         print(f"股票代码和市值数据已保存到 {filepath}")
         
@@ -440,10 +448,23 @@ def load_financial_data(stock_code=None):
         print(f"加载财务数据时发生错误: {str(e)}")
         return None
 
-def download_all_financial_data(max_workers=5):
+def download_all_financial_data(max_workers=5, force_update=False):
     """
     下载所有股票的财务数据
+    
+    参数:
+    max_workers (int): 最大线程数，默认5
+    force_update (bool): 是否强制更新数据，默认为False
+    
+    返回:
+    bool: 是否成功下载所有数据
     """
+    # 检查本地文件是否存在
+    filepath = os.path.join(DATA_ROOT, 'financial_data', 'all_stocks_financial.csv')
+    if os.path.exists(filepath) and not force_update:
+        print(f"从本地文件读取财务数据: {filepath}")
+        return True
+        
     all_stocks = load_stock_codes_from_csv()
     if all_stocks is None:
         return False

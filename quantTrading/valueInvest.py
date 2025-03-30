@@ -419,6 +419,9 @@ def smartSelect():
         print("收益率<0的股票数量："+str(negative_df.shape[0])+"\n收益率最低的10只股票:")
         print(negative_df.head(10))
 
+"""
+回测+实盘
+"""
 def backtest_stock(stock_code, start_date, end_date):
     """
     对单只股票进行回测，计算收益率、最大回撤并绘制图表
@@ -445,9 +448,19 @@ def backtest_stock(stock_code, start_date, end_date):
     stock_price_df['收益率'] = stock_price_df['收盘'] / initial_price - 1
     
     # 计算最大回撤
-    stock_price_df['累计最大值'] = stock_price_df['收盘'].cummax()
-    stock_price_df['回撤'] = (stock_price_df['收盘'] - stock_price_df['累计最大值']) / stock_price_df['累计最大值']
+    # 1. 计算每个时间点的历史最高价
+    stock_price_df['历史最高价'] = stock_price_df['收盘'].expanding().max()
+    
+    # 2. 计算每个时间点的回撤
+    stock_price_df['回撤'] = (stock_price_df['收盘'] - stock_price_df['历史最高价']) / stock_price_df['历史最高价']
+    
+    # 3. 计算最大回撤
     max_drawdown = stock_price_df['回撤'].min() * 100
+    
+    # 4. 找出最大回撤发生的区间
+    max_drawdown_idx = stock_price_df['回撤'].idxmin()
+    # 向前查找最近的历史最高价
+    peak_idx = stock_price_df.loc[:max_drawdown_idx, '收盘'].idxmax()
     
     # 计算总收益率
     total_return = stock_price_df['收益率'].iloc[-1] * 100
@@ -468,15 +481,16 @@ def backtest_stock(stock_code, start_date, end_date):
     plt.scatter(stock_price_df['日期'].iloc[-1], stock_price_df['收盘'].iloc[-1], 
                 color='red', s=100, label='终止点', zorder=5, edgecolors='black')
     
-    # 标记最高点和最低点
-    max_idx = stock_price_df['收盘'].idxmax() if hasattr(stock_price_df['收盘'], 'idxmax') else stock_price_df['收盘'].values.argmax()
-    min_idx = stock_price_df['收盘'].idxmin() if hasattr(stock_price_df['收盘'], 'idxmin') else stock_price_df['收盘'].values.argmin()
+    # 标记最大回撤区间
+    plt.scatter(stock_price_df['日期'].loc[peak_idx], stock_price_df['收盘'].loc[peak_idx], 
+                color='yellow', s=100, label='最大回撤起点', zorder=5, edgecolors='black')
+    plt.scatter(stock_price_df['日期'].loc[max_drawdown_idx], stock_price_df['收盘'].loc[max_drawdown_idx], 
+                color='purple', s=100, label='最大回撤终点', zorder=5, edgecolors='black')
     
-    # 使用数值索引访问最高点和最低点
-    plt.scatter(stock_price_df['日期'].iloc[max_idx], stock_price_df['收盘'].iloc[max_idx], 
-                color='yellow', s=100, label='最高点', zorder=5, edgecolors='black')
-    plt.scatter(stock_price_df['日期'].iloc[min_idx], stock_price_df['收盘'].iloc[min_idx], 
-                color='purple', s=100, label='最低点', zorder=5, edgecolors='black')
+    # 绘制最大回撤区间
+    plt.plot([stock_price_df['日期'].loc[peak_idx], stock_price_df['日期'].loc[max_drawdown_idx]], 
+             [stock_price_df['收盘'].loc[peak_idx], stock_price_df['收盘'].loc[max_drawdown_idx]], 
+             'r--', linewidth=2, label='最大回撤区间')
     
     # 获取股票名称
     stock_info = pd.read_csv(os.path.join(DATA_ROOT, 'all_stocks.csv'))
@@ -495,6 +509,7 @@ def backtest_stock(stock_code, start_date, end_date):
         f"总收益率: {total_return:.2f}%\n"
         f"年化收益率: {annualized_return:.2f}%\n"
         f"最大回撤: {max_drawdown:.2f}%\n"
+        f"最大回撤区间: {stock_price_df['日期'].loc[peak_idx].strftime('%Y-%m-%d')} 至 {stock_price_df['日期'].loc[max_drawdown_idx].strftime('%Y-%m-%d')}\n"
         f"起始价格: {stock_price_df['收盘'].iloc[0]:.2f}元\n"
         f"结束价格: {stock_price_df['收盘'].iloc[-1]:.2f}元"
     )
@@ -519,54 +534,354 @@ def backtest_stock(stock_code, start_date, end_date):
     print(f"总收益率: {total_return:.2f}%")
     print(f"年化收益率: {annualized_return:.2f}%")
     print(f"最大回撤: {max_drawdown:.2f}%")
+    print(f"最大回撤区间: {stock_price_df['日期'].loc[peak_idx].strftime('%Y-%m-%d')} 至 {stock_price_df['日期'].loc[max_drawdown_idx].strftime('%Y-%m-%d')}")
     
     return total_return, max_drawdown, annualized_return
 
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """
+    计算双线MACD指标
+    
+    参数:
+    prices: 价格序列
+    fast: 快线周期，默认12
+    slow: 慢线周期，默认26
+    signal: 信号线周期，默认9
+    
+    返回:
+    DataFrame: 包含MACD指标的DataFrame
+    """
+    # 计算快线和慢线的EMA
+    ema_fast = prices.ewm(span=fast, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow, adjust=False).mean()
+    
+    # 计算MACD线（双线）
+    macd_line = ema_fast - ema_slow
+    macd_line2 = macd_line.ewm(span=signal, adjust=False).mean()
+    
+    # 计算MACD柱状图
+    macd_hist = macd_line - macd_line2
+    
+    return pd.DataFrame({
+        'macd': macd_line,
+        'macd2': macd_line2,
+        'hist': macd_hist
+    })
+
+def backtest_macd_strategy(stock_code, start_date, end_date):
+    """
+    对单只股票进行MACD策略回测
+    
+    参数:
+    stock_code (str): 股票代码
+    start_date (str): 开始日期，格式为'YYYYMMDD'
+    end_date (str): 结束日期，格式为'YYYYMMDD'
+    
+    返回:
+    tuple: (收益率, 最大回撤, 年化收益率)
+    """
+    try:
+        # 1. 从本地文件获取股票每日收盘价
+        stock_price_df = load_stock_history(stock_code, start_date, end_date)
+        if stock_price_df is None or stock_price_df.empty:
+            print(f"未找到股票 {stock_code} 的历史数据")
+            return None
+        
+        # 确保日期为datetime格式
+        stock_price_df['日期'] = pd.to_datetime(stock_price_df['日期'])
+        stock_price_df.set_index('日期', inplace=True)
+        
+        # 计算MACD指标
+        macd_data = calculate_macd(stock_price_df['收盘'])
+        
+        # 计算金叉和死叉信号
+        # 金叉：MACD线从下向上穿过MACD2线
+        # 死叉：MACD线从上向下穿过MACD2线
+        macd_data['golden_cross'] = (macd_data['macd'] > macd_data['macd2']) & (macd_data['macd'].shift(1) <= macd_data['macd2'].shift(1))
+        macd_data['death_cross'] = (macd_data['macd'] < macd_data['macd2']) & (macd_data['macd'].shift(1) >= macd_data['macd2'].shift(1))
+        
+        # 生成交易信号
+        # 1表示买入，-1表示卖出，0表示持仓不变
+        macd_data['signal'] = 0
+        macd_data.loc[macd_data['golden_cross'], 'signal'] = 1
+        macd_data.loc[macd_data['death_cross'], 'signal'] = -1
+        
+        # 计算持仓状态
+        macd_data['position'] = macd_data['signal'].cumsum()
+        
+        # 计算收益率
+        returns = stock_price_df['收盘'].pct_change()
+        strategy_returns = returns * macd_data['position'].shift(1)
+        
+        # 计算净值
+        nav = (1 + strategy_returns).cumprod()
+        
+        # 计算基准净值
+        benchmark_nav = (1 + returns).cumprod()
+        
+        # 计算总收益率
+        total_return = nav.iloc[-1] - 1
+        total_return *= 100
+        
+        # 计算年化收益率
+        days = (stock_price_df.index[-1] - stock_price_df.index[0]).days
+        annualized_return = (1 + total_return/100) ** (365.0/days) - 1
+        annualized_return *= 100
+        
+        # 计算最大回撤
+        # 1. 计算每个时间点的历史最高价
+        rolling_max = nav.expanding().max()
+        
+        # 2. 计算每个时间点的回撤
+        drawdown = (nav - rolling_max) / rolling_max
+        
+        # 3. 计算最大回撤
+        max_drawdown = drawdown.min() * 100
+        
+        # 4. 找出最大回撤发生的区间
+        max_drawdown_idx = drawdown.idxmin()
+        # 向前查找最近的历史最高价
+        peak_idx = nav.loc[:max_drawdown_idx].idxmax()
+        
+        # 2. 绘制股价散点图
+        plt.figure(figsize=(14, 8))
+        
+        # 绘制净值曲线
+        plt.subplot(2, 1, 1)
+        plt.plot(stock_price_df.index, nav, color='#1f77b4', label='策略净值')
+        plt.plot(stock_price_df.index, benchmark_nav, color='#ff7f0e', label='基准净值')
+        
+        # 标记买入点和卖出点
+        buy_points = macd_data[macd_data['signal'] == 1].index
+        sell_points = macd_data[macd_data['signal'] == -1].index
+        
+        plt.scatter(buy_points, nav[buy_points], color='green', s=100, label='买入点', zorder=5)
+        plt.scatter(sell_points, nav[sell_points], color='red', s=100, label='卖出点', zorder=5)
+        
+        plt.title(f'{stock_code} MACD策略回测结果')
+        plt.xlabel('日期')
+        plt.ylabel('净值')
+        plt.grid(True)
+        plt.legend()
+        
+        # 绘制MACD指标
+        plt.subplot(2, 1, 2)
+        plt.plot(stock_price_df.index, macd_data['macd'], color='#1f77b4', label='MACD线')
+        plt.plot(stock_price_df.index, macd_data['macd2'], color='#ff7f0e', label='MACD2线')
+        plt.bar(stock_price_df.index, macd_data['hist'], color='#2ca02c', alpha=0.3, label='MACD柱状图')
+        
+        plt.title('MACD指标')
+        plt.xlabel('日期')
+        plt.ylabel('MACD')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # 获取股票名称
+        stock_info = pd.read_csv(os.path.join(DATA_ROOT, 'all_stocks.csv'))
+        stock_info['stock_code'] = stock_info['stock_code'].astype(str).str.zfill(6)
+        stock_name = stock_info[stock_info['stock_code'] == stock_code]['stock_name'].values[0] if not stock_info[stock_info['stock_code'] == stock_code].empty else '未知'
+        
+        # 3. 打印收益和回撤数据
+        print(f"\n--- {stock_code} {stock_name} MACD策略回测结果 ---")
+        print(f"回测区间: {start_date} 至 {end_date}")
+        print(f"交易天数: {len(stock_price_df)}天")
+        print(f"总收益率: {total_return:.2f}%")
+        print(f"年化收益率: {annualized_return:.2f}%")
+        print(f"最大回撤: {max_drawdown:.2f}%")
+        print(f"最大回撤区间: {stock_price_df.index[peak_idx].strftime('%Y-%m-%d')} 至 {stock_price_df.index[max_drawdown_idx].strftime('%Y-%m-%d')}")
+        
+        # 打印交易统计
+        trades = macd_data[macd_data['signal'] != 0]
+        print("\n交易统计:")
+        print(f"总交易次数: {len(trades)}")
+        print(f"买入次数: {len(trades[trades['signal'] == 1])}")
+        print(f"卖出次数: {len(trades[trades['signal'] == -1])}")
+        
+        return total_return, max_drawdown, annualized_return
+        
+    except Exception as e:
+        print(f"回测过程中发生错误: {str(e)}")
+        return None
+
+def backtest_macd_strategy_positive(stock_code, start_date, end_date):
+    """
+    对单只股票进行MACD策略回测，只在MACD金叉且MACD值大于0时买入
+    
+    参数:
+    stock_code (str): 股票代码
+    start_date (str): 开始日期，格式为'YYYYMMDD'
+    end_date (str): 结束日期，格式为'YYYYMMDD'
+    
+    返回:
+    tuple: (收益率, 最大回撤, 年化收益率)
+    """
+    try:
+        # 1. 从本地文件获取股票每日收盘价
+        stock_price_df = load_stock_history(stock_code, start_date, end_date)
+        if stock_price_df is None or stock_price_df.empty:
+            print(f"未找到股票 {stock_code} 的历史数据")
+            return None
+        
+        # 确保日期为datetime格式
+        stock_price_df['日期'] = pd.to_datetime(stock_price_df['日期'])
+        stock_price_df.set_index('日期', inplace=True)
+        
+        # 计算MACD指标
+        macd_data = calculate_macd(stock_price_df['收盘'])
+        
+        # 计算金叉和死叉信号
+        # 金叉：MACD线从下向上穿过MACD2线
+        # 死叉：MACD线从上向下穿过MACD2线
+        macd_data['golden_cross'] = (macd_data['macd'] > macd_data['macd2']) & (macd_data['macd'].shift(1) <= macd_data['macd2'].shift(1))
+        macd_data['death_cross'] = (macd_data['macd'] < macd_data['macd2']) & (macd_data['macd'].shift(1) >= macd_data['macd2'].shift(1))
+        
+        # 生成交易信号
+        # 1表示买入，-1表示卖出，0表示持仓不变
+        macd_data['signal'] = 0
+        # 只在金叉且MACD值大于0时买入
+        macd_data.loc[(macd_data['golden_cross']) & (macd_data['macd'] > 0), 'signal'] = 1
+        # 在死叉时卖出
+        macd_data.loc[macd_data['death_cross'], 'signal'] = -1
+        
+        # 计算持仓状态
+        position = 0
+        macd_data['position'] = 0
+        for i in range(len(macd_data)):
+            if macd_data['signal'].iloc[i] == 1:
+                position = 1
+            elif macd_data['signal'].iloc[i] == -1 and position == 1:
+                position = 0
+            macd_data['position'].iloc[i] = position
+        
+        # 计算收益率
+        returns = stock_price_df['收盘'].pct_change()
+        strategy_returns = returns * macd_data['position'].shift(1)
+        
+        # 计算净值
+        nav = (1 + strategy_returns).cumprod()
+        
+        # 计算基准净值
+        benchmark_nav = (1 + returns).cumprod()
+        
+        # 计算总收益率
+        total_return = nav.iloc[-1] - 1
+        total_return *= 100
+        
+        # 计算年化收益率
+        days = (stock_price_df.index[-1] - stock_price_df.index[0]).days
+        annualized_return = (1 + total_return/100) ** (365.0/days) - 1
+        annualized_return *= 100
+        
+        # 计算最大回撤
+        # 1. 计算每个时间点的历史最高价
+        rolling_max = nav.expanding().max()
+        
+        # 2. 计算每个时间点的回撤
+        drawdown = (nav - rolling_max) / rolling_max
+        
+        # 3. 计算最大回撤
+        max_drawdown = drawdown.min() * 100
+        
+        # 4. 找出最大回撤发生的区间
+        max_drawdown_idx = drawdown.idxmin()
+        # 向前查找最近的历史最高价
+        peak_idx = nav.loc[:max_drawdown_idx].idxmax()
+        
+        # 2. 绘制股价散点图
+        plt.figure(figsize=(14, 8))
+        
+        # 绘制净值曲线
+        plt.subplot(2, 1, 1)
+        plt.plot(stock_price_df.index, nav, color='#1f77b4', label='策略净值')
+        plt.plot(stock_price_df.index, benchmark_nav, color='#ff7f0e', label='基准净值')
+        
+        # 标记买入点和卖出点
+        buy_points = macd_data[macd_data['signal'] == 1].index
+        sell_points = macd_data[macd_data['signal'] == -1].index
+        
+        plt.scatter(buy_points, nav[buy_points], color='green', s=100, label='买入点', zorder=5)
+        plt.scatter(sell_points, nav[sell_points], color='red', s=100, label='卖出点', zorder=5)
+        
+        plt.title(f'{stock_code} MACD策略回测结果 (仅MACD>0时买入)')
+        plt.xlabel('日期')
+        plt.ylabel('净值')
+        plt.grid(True)
+        plt.legend()
+        
+        # 绘制MACD指标
+        plt.subplot(2, 1, 2)
+        plt.plot(stock_price_df.index, macd_data['macd'], color='#1f77b4', label='MACD线')
+        plt.plot(stock_price_df.index, macd_data['macd2'], color='#ff7f0e', label='MACD2线')
+        plt.bar(stock_price_df.index, macd_data['hist'], color='#2ca02c', alpha=0.3, label='MACD柱状图')
+        plt.axhline(y=0, color='gray', linestyle='--', alpha=0.3)  # 添加0线
+        
+        plt.title('MACD指标')
+        plt.xlabel('日期')
+        plt.ylabel('MACD')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # 获取股票名称
+        stock_info = pd.read_csv(os.path.join(DATA_ROOT, 'all_stocks.csv'))
+        stock_info['stock_code'] = stock_info['stock_code'].astype(str).str.zfill(6)
+        stock_name = stock_info[stock_info['stock_code'] == stock_code]['stock_name'].values[0] if not stock_info[stock_info['stock_code'] == stock_code].empty else '未知'
+        
+        # 3. 打印收益和回撤数据
+        print(f"\n--- {stock_code} {stock_name} MACD策略回测结果 (仅MACD>0时买入) ---")
+        print(f"回测区间: {start_date} 至 {end_date}")
+        print(f"交易天数: {len(stock_price_df)}天")
+        print(f"总收益率: {total_return:.2f}%")
+        print(f"年化收益率: {annualized_return:.2f}%")
+        print(f"最大回撤: {max_drawdown:.2f}%")
+        print(f"最大回撤区间: {stock_price_df.index[peak_idx].strftime('%Y-%m-%d')} 至 {stock_price_df.index[max_drawdown_idx].strftime('%Y-%m-%d')}")
+        
+        # 打印交易统计
+        trades = macd_data[macd_data['signal'] != 0]
+        print("\n交易统计:")
+        print(f"总交易次数: {len(trades)}")
+        print(f"买入次数: {len(trades[trades['signal'] == 1])}")
+        print(f"卖出次数: {len(trades[trades['signal'] == -1])}")
+        
+        # 打印MACD统计
+        golden_crosses = macd_data[macd_data['golden_cross']]
+        positive_golden_crosses = golden_crosses[golden_crosses['macd'] > 0]
+        print("\nMACD统计:")
+        print(f"总金叉次数: {len(golden_crosses)}")
+        print(f"MACD>0的金叉次数: {len(positive_golden_crosses)}")
+        print(f"实际买入次数: {len(trades[trades['signal'] == 1])}")
+        
+        return total_return, max_drawdown, annualized_return
+        
+    except Exception as e:
+        print(f"回测过程中发生错误: {str(e)}")
+        return None
+
 # 使用示例
 if __name__ == "__main__":
-    # 1.获取所有股票代码和当前市值
-    #get_and_save_stock_codes()
+    # # 1.获取所有股票代码和当前市值
+    # get_and_save_stock_codes()
 
     # # 首先下载所有股票的财务数据（只需要运行一次）
     # print("开始下载财务数据...")
     # download_all_financial_data(max_workers=3)
 
-    # # 然后再获取PE值
-    # target_date = "20050105"
-    # result_df = get_all_stocks_pe(target_date, max_workers=5)
-    #
-    # if result_df is not None:
-    #     print("\nPE值最低的10只股票:")
-    #     print(result_df.head(10))
-    # # 保存pe数据
-    # # 与target_date联动
-    # result_df.to_csv(f'stock_pe_{target_date}.csv', index=False, encoding='utf-8-sig')
+    # smartSelect()
 
-    # # 分析多只股票的价格和PE关系
-    # stock_codes = ["000001", "600000", "600036"]  # 示例股票代码
-    # start_date = "20200101"
-    # end_date = "20231231"
-    # analyze_multiple_stocks_price_and_pe(stock_codes, start_date, end_date)
+    #backtest_stock("000001", "20150104","20230104")
 
-    #smartSelect()
+    # MACD策略回测
+    stock_code = "600612"  # 平安银行
+    start_date = "20200101"
+    end_date = "20231231"
+    result = backtest_macd_strategy_positive(stock_code, start_date, end_date)
 
-    backtest_stock("000001", "20150104","20230104")
     
-    # 回测示例
-    # backtest_stock("600519", "20100101", "20231231")
-
-    # 下载所有股票的历史数据
-    #start_date = "20000101"  # 从2000年开始
-    # download_all_stocks_history(start_date, max_workers=5)
-    #download_all_stocks_history(start_date, max_workers=3,adjust_type=None)
-    
-    # # 加载单个股票的历史数据示例
-    # stock_code = "000001"
-    # hist_data = load_stock_history(stock_code)
-    # if hist_data is not None:
-    #     print(f"\n股票 {stock_code} 的历史数据:")
-    #     print(hist_data.head())
-
 
 
 

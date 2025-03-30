@@ -2,6 +2,8 @@ import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
+import akshare as ak
 plt.switch_backend('TkAgg')  # 添加这行代码
 
 def get_drawdown(p):
@@ -192,7 +194,7 @@ def fastTest(start_date, end_date):
     target_wgt2 = calendar_stgy(data, start_date, end_date, params={'index_id':'csi1000', 't1':1, 't2':5})
     target_wgt3 = rotation_stgy(data, start_date, end_date, params={'N':20})
     target_wgt4 = rotation_stgy1(data, start_date, end_date, params={'N':20})
-    target_wgt = 0*target_wgt1 + 0.5*target_wgt2 + 0*target_wgt3 + 0.5*target_wgt4 # 多策略目标组合整合
+    target_wgt = 1*target_wgt1 + 0*target_wgt2 + 0*target_wgt3 + 0*target_wgt4 # 多策略目标组合整合
 
     # 产生每日持仓权重
     hold_wgt = target_wgt # 假设每天都可以准确地执行交易计划
@@ -215,7 +217,7 @@ def fastTest(start_date, end_date):
     res.loc[:,['hs300','csi500','account']].plot(figsize=(16,8), grid=True)
     plt.show()
 
-    cal_period_perf_indicator(res.loc[:,['hs300','csi500','account']])
+    print(cal_period_perf_indicator(res.loc[:,['hs300','csi500','account']]))
 
 
 
@@ -241,9 +243,97 @@ def safeTradeBefore(T, target_amount):
     print('目标持仓市值：')
     print(target_mv)
 
+
+
+def update_index_data():
+    """
+    获取并更新指数数据，包括中证1000、中证500、沪深300和上证指数
+    数据从2021年8月27日开始
+    """
+    try:
+        # 定义指数代码和名称的映射
+        index_map = {
+            'sh000919': 'csi1000',
+            'sh000905': 'csi500',
+            'sh000300': 'hs300',
+            'sh000001': 'sse'
+        }
+        
+        # 创建结果DataFrame
+        all_index_data = pd.DataFrame()
+        
+        # 获取每个指数的数据
+        for index_code, index_name in index_map.items():
+            print(f"正在获取{index_name}数据...")
+            try:
+                # 获取指数数据
+                index_data = ak.stock_zh_index_daily_tx(symbol=index_code)
+                
+                # 确保数据不为空
+                if index_data is not None and not index_data.empty:
+                    # 转换日期格式
+                    index_data['date'] = pd.to_datetime(index_data['date'])
+                    
+                    # 筛选2021年8月27日之后的数据
+                    index_data = index_data[index_data['date'] >= '2021-08-27']
+                    
+                    # 只保留日期和收盘价
+                    index_data = index_data[['date', 'close']]
+                    index_data.columns = ['datetime', index_name]
+                    
+                    # 添加到结果DataFrame
+                    if all_index_data.empty:
+                        all_index_data = index_data
+                    else:
+                        all_index_data = pd.merge(all_index_data, index_data, on='datetime', how='outer')
+                    
+                    print(f"{index_name}数据获取成功，共{len(index_data)}条记录")
+                else:
+                    print(f"获取{index_name}数据失败：数据为空")
+                    
+            except Exception as e:
+                print(f"获取{index_name}数据时发生错误: {str(e)}")
+                continue
+        
+        # 如果成功获取了数据
+        if not all_index_data.empty:
+            # 按日期排序
+            all_index_data = all_index_data.sort_values('datetime')
+            
+            # 读取现有的basic_data.csv（如果存在）
+            existing_file = 'basic_data.csv'
+            if os.path.exists(existing_file):
+                existing_data = pd.read_csv(existing_file)
+                existing_data['datetime'] = pd.to_datetime(existing_data['datetime'])
+                # 合并新旧数据
+                all_index_data = pd.concat([existing_data, all_index_data]).drop_duplicates(subset=['datetime'])
+                all_index_data = all_index_data.sort_values('datetime')
+            
+            # 保存到CSV文件
+            all_index_data.to_csv(existing_file, index=False, encoding='utf-8-sig')
+            print(f"\n指数数据已保存到: {existing_file}")
+            print(f"总记录数: {len(all_index_data)}")
+            
+            # 打印每个指数的数据统计
+            for index_name in index_map.values():
+                index_count = all_index_data[index_name].notna().sum()
+                print(f"{index_name}: {index_count}条记录")
+            
+            return all_index_data
+        else:
+            print("未获取到任何有效的指数数据")
+            return None
+            
+    except Exception as e:
+        print(f"更新指数数据时发生错误: {str(e)}")
+        return None
+
+
+#update_index_data()
+
 # 设置回测参数
-start_date = datetime.date(2004,12,31) # 回测起始日期
-end_date = datetime.date(2021,7,31) # 回测截止日期
+start_date = datetime.date(2020,1,1) # 回测起始日期
+end_date = datetime.date(2025,3,31) # 回测截止日期
 # 回测函数
 fastTest(start_date, end_date)
 
