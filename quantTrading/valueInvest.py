@@ -603,17 +603,65 @@ def backtest_macd_strategy(stock_code, start_date, end_date):
         # 生成交易信号
         # 1表示买入，-1表示卖出，0表示持仓不变
         macd_data['signal'] = 0
-        macd_data.loc[macd_data['golden_cross'], 'signal'] = 1
+        
+        # 计算金叉周期
+        position = 0
+        in_golden_period = pd.Series(False, index=macd_data.index)
+        for i in range(len(macd_data)):
+            if macd_data['golden_cross'].iloc[i]:
+                position = 1
+            elif macd_data['death_cross'].iloc[i]:
+                position = 0
+            in_golden_period.iloc[i] = position == 1
+        
+        # 将计算结果赋值给DataFrame
+        macd_data['in_golden_period'] = in_golden_period
+        
+        # 计算MACD从负转正的信号
+        macd_data['macd_turn_positive'] = (macd_data['macd'] > 0) & (macd_data['macd'].shift(1) <= 0)
+        
+        # 买入条件：
+        # 1. 金叉且MACD > 0
+        # 2. 或者金叉周期内MACD从负转正
+        macd_data.loc[
+            (macd_data['golden_cross'] & (macd_data['macd'] > 0)) |  # 金叉时MACD为正
+            (macd_data['in_golden_period'] & macd_data['macd_turn_positive']),  # 金叉周期内MACD从负转正
+            'signal'
+        ] = 1
+        
+        # 在死叉时卖出
         macd_data.loc[macd_data['death_cross'], 'signal'] = -1
         
         # 计算持仓状态
-        macd_data['position'] = macd_data['signal'].cumsum()
+        position = 0
+        positions = []
+        for i in range(len(macd_data)):
+            if macd_data['signal'].iloc[i] == 1:
+                position = 1
+            elif macd_data['signal'].iloc[i] == -1 and position == 1:
+                position = 0
+            positions.append(position)
+        
+        # 一次性更新position列
+        macd_data['position'] = positions
+        
+        # 设置初始资金
+        initial_capital = 1000000  # 100万初始资金
         
         # 计算收益率
         returns = stock_price_df['收盘'].pct_change()
         strategy_returns = returns * macd_data['position'].shift(1)
         
-        # 计算净值
+        # 计算每日资金量
+        capital = pd.Series(initial_capital, index=stock_price_df.index)
+        for i in range(1, len(capital)):
+            if macd_data['position'].iloc[i-1] == 1:  # 如果持有仓位
+                capital.iloc[i] = capital.iloc[i-1] * (1 + returns.iloc[i])
+            else:  # 如果没有持仓
+                capital.iloc[i] = capital.iloc[i-1]
+        
+        # 计算净值（相对于初始资金）
+                # 计算净值
         nav = (1 + strategy_returns).cumprod()
         
         # 计算基准净值
@@ -741,27 +789,66 @@ def backtest_macd_strategy_positive(stock_code, start_date, end_date):
         # 生成交易信号
         # 1表示买入，-1表示卖出，0表示持仓不变
         macd_data['signal'] = 0
-        # 只在金叉且MACD值大于0时买入
-        macd_data.loc[(macd_data['golden_cross']) & (macd_data['macd'] > 0), 'signal'] = 1
+        
+        # 计算金叉周期
+        position = 0
+        in_golden_period = pd.Series(False, index=macd_data.index)
+        for i in range(len(macd_data)):
+            if macd_data['golden_cross'].iloc[i]:
+                position = 1
+            elif macd_data['death_cross'].iloc[i]:
+                position = 0
+            in_golden_period.iloc[i] = position == 1
+        
+        # 将计算结果赋值给DataFrame
+        macd_data['in_golden_period'] = in_golden_period
+        
+        # 计算MACD从负转正的信号
+        macd_data['macd_turn_positive'] = (macd_data['macd'] > 0) & (macd_data['macd'].shift(1) <= 0)
+        
+        # 买入条件：
+        # 1. 金叉且MACD > 0
+        # 2. 或者金叉周期内MACD从负转正
+        macd_data.loc[
+            (macd_data['golden_cross'] & (macd_data['macd'] > 0)) |  # 金叉时MACD为正
+            (macd_data['in_golden_period'] & macd_data['macd_turn_positive']),  # 金叉周期内MACD从负转正
+            'signal'
+        ] = 1
+        
         # 在死叉时卖出
         macd_data.loc[macd_data['death_cross'], 'signal'] = -1
         
         # 计算持仓状态
         position = 0
-        macd_data['position'] = 0
+        positions = []
         for i in range(len(macd_data)):
             if macd_data['signal'].iloc[i] == 1:
                 position = 1
             elif macd_data['signal'].iloc[i] == -1 and position == 1:
                 position = 0
-            macd_data['position'].iloc[i] = position
+            positions.append(position)
+        
+        # 一次性更新position列
+        macd_data['position'] = positions
+        
+        # 设置初始资金
+        initial_capital = 1000000  # 100万初始资金
         
         # 计算收益率
         returns = stock_price_df['收盘'].pct_change()
         strategy_returns = returns * macd_data['position'].shift(1)
         
+        # 计算每日资金量
+        capital = pd.Series(initial_capital, index=stock_price_df.index)
+        for i in range(1, len(capital)):
+            if macd_data['position'].iloc[i-1] == 1:  # 如果持有仓位
+                capital.iloc[i] = capital.iloc[i-1] * (1 + returns.iloc[i])
+            else:  # 如果没有持仓
+                capital.iloc[i] = capital.iloc[i-1]
+        
         # 计算净值
         nav = (1 + strategy_returns).cumprod()
+
         
         # 计算基准净值
         benchmark_nav = (1 + returns).cumprod()
@@ -802,8 +889,8 @@ def backtest_macd_strategy_positive(stock_code, start_date, end_date):
         buy_points = macd_data[macd_data['signal'] == 1].index
         sell_points = macd_data[macd_data['signal'] == -1].index
         
-        plt.scatter(buy_points, nav[buy_points], color='green', s=100, label='买入点', zorder=5)
-        plt.scatter(sell_points, nav[sell_points], color='red', s=100, label='卖出点', zorder=5)
+        plt.scatter(buy_points, nav[buy_points], color='green', s=20, label='买入点', zorder=5)
+        plt.scatter(sell_points, nav[sell_points], color='red', s=20, label='卖出点', zorder=5)
         
         plt.title(f'{stock_code} MACD策略回测结果 (仅MACD>0时买入)')
         plt.xlabel('日期')
@@ -836,10 +923,32 @@ def backtest_macd_strategy_positive(stock_code, start_date, end_date):
         print(f"\n--- {stock_code} {stock_name} MACD策略回测结果 (仅MACD>0时买入) ---")
         print(f"回测区间: {start_date} 至 {end_date}")
         print(f"交易天数: {len(stock_price_df)}天")
+        
+        # 计算基准收益率
+        benchmark_return = (benchmark_nav.iloc[-1] - 1) * 100
+        benchmark_annualized_return = (1 + benchmark_return/100) ** (365.0/days) - 1
+        benchmark_annualized_return *= 100
+        
+        # 计算基准最大回撤
+        benchmark_rolling_max = benchmark_nav.expanding().max()
+        benchmark_drawdown = (benchmark_nav - benchmark_rolling_max) / benchmark_rolling_max
+        benchmark_max_drawdown = benchmark_drawdown.min() * 100
+        
+        print("\n策略表现:")
         print(f"总收益率: {total_return:.2f}%")
         print(f"年化收益率: {annualized_return:.2f}%")
         print(f"最大回撤: {max_drawdown:.2f}%")
-        print(f"最大回撤区间: {stock_price_df.index[peak_idx].strftime('%Y-%m-%d')} 至 {stock_price_df.index[max_drawdown_idx].strftime('%Y-%m-%d')}")
+        print(f"最大回撤区间: {peak_idx.strftime('%Y-%m-%d')} 至 {max_drawdown_idx.strftime('%Y-%m-%d')}")
+        
+        print("\n基准表现:")
+        print(f"总收益率: {benchmark_return:.2f}%")
+        print(f"年化收益率: {benchmark_annualized_return:.2f}%")
+        print(f"最大回撤: {benchmark_max_drawdown:.2f}%")
+        
+        print("\n策略vs基准:")
+        print(f"超额收益率: {(total_return - benchmark_return):.2f}%")
+        print(f"超额年化收益率: {(annualized_return - benchmark_annualized_return):.2f}%")
+        print(f"回撤改善: {(benchmark_max_drawdown - max_drawdown):.2f}%")
         
         # 打印交易统计
         trades = macd_data[macd_data['signal'] != 0]
@@ -876,9 +985,9 @@ if __name__ == "__main__":
     #backtest_stock("000001", "20150104","20230104")
 
     # MACD策略回测
-    stock_code = "600612"  # 平安银行
-    start_date = "20200101"
-    end_date = "20231231"
+    stock_code = "600036"  # 平安银行
+    start_date = "20150101"
+    end_date = "20160731"
     result = backtest_macd_strategy_positive(stock_code, start_date, end_date)
 
     
