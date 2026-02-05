@@ -1,0 +1,41 @@
+{
+  "watch_stocks": [
+   "00001.HK",
+    "02669.HK",
+    "01113.HK",
+    "BRK.B.US",
+    "09896.HK",
+    "00291.HK",
+    "02460.HK",
+    "00882.HK",
+    "01522.HK",
+    "02219.HK",
+    "00960.HK",
+    "09896.HK",
+    "01036.HK",
+    "06862.HK",
+    "09618.HK",
+    "06989.HK",
+    "09988.HK",
+    "09898.HK",
+    "00960.HK",
+    "03690.HK",
+    "01357.HK",
+    "00700.HK"
+  ],
+  "longport": {
+    "app_key": "50453a367567559a7f1f4ce6f5a6fd52",
+    "app_secret": "3fab1f6a31a840013bc3cb6b2030aa0ae020964ca70108203f66df5d80acc9ac",
+    "access_token": "m_eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJsb25nYnJpZGdlIiwic3ViIjoiYWNjZXNzX3Rva2VuIiwiZXhwIjoxNzc3OTA4NjM2LCJpYXQiOjE3NzAxMzI2MzcsImFrIjoiNTA0NTNhMzY3NTY3NTU5YTdmMWY0Y2U2ZjVhNmZkNTIiLCJhYWlkIjoyMDY3MDQzMiwiYWMiOiJsYiIsIm1pZCI6MTkzNDUzNzcsInNpZCI6IlVHYUFML0RMUVJ6WUZEQ0xCRkZhYXc9PSIsImJsIjozLCJ1bCI6MCwiaWsiOiJsYl8yMDY3MDQzMiJ9.yTFbPJkOEeXIdzosWCWZbUWLTIU5llgAYfwHvXvfLazTUXKi8xjcT6IIkishhwmOW3PUrSgEHm-dP3hptArXiJVmK43fxtHTqov-4YAuQO1PwWW3k33zYHkGQr2VyLAU0gw7XCXrKQaBO1PrtPehUyy11aU2Z0S_ihxmCRNoQjI151GG_QXlieJe7i-lKem0pswd1HSWZnGmPNhiYfMpkxvFsNDwvh6Cv9Q7yQyE7-TXuiIPFgUcTUw8jK75t5OosDmMSPTqysfr9ZHGGm8uZSH39vcNVF5rXZw9PJdP3queEswqysoJIeENP62thjYqpLrkIe99DZH919utnS92O1cVN5hLT-gIEvKDyIQAs8Jq_tTYGoNXe1yGXDNWuQiraHEZDA2GBNS34Enz4lh5b30YZEL0S3dufOBuh4JQfs4GHAn6kj1pf62SiFsh8sCNtSQV3tEk6QZL-zPIEvlKB-Yk_NUm4rEw2d6eyHWXAbcxhNGDiJF_VeMT61f0eF3gHyK4DfG19qlvoLbd0RWVMw-BqHy1Ss3by9mzMSVFaklbF3Pz4GfSIg9Kn0uCRsXeFHevKG14EgBUhgIC1jkGaHQw4jn31F5duwx6yv2OYEB3F6pIOPynQ4Lc9Jn0r6GVmE-SKbjlP6Xf312xtsFJ94d6GTvk9jvH-K5iNRV18Ns"
+  },
+  "email": {
+    "smtp_server": "smtp.qq.com",
+    "smtp_port": 465,
+    "sender": "leekle@foxmail.com",
+    "password": "mzagwwwwhhhgbbjf",
+    "receivers": [
+      "809549783@qq.com"]
+  },
+  "check_interval": 5,
+  "ma_period": 20
+}
